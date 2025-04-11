@@ -4,16 +4,16 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.content.*
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.ListView
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -26,11 +26,12 @@ class AvalibleDivices : AppCompatActivity() {
     private lateinit var arrayAdapter: ArrayAdapter<String>
     private val deviceList = ArrayList<String>()
 
+    private lateinit var bluetoothEnableLauncher: ActivityResultLauncher<Intent>
+
     private val receiver = object : BroadcastReceiver() {
         @SuppressLint("MissingPermission")
         override fun onReceive(context: Context?, intent: Intent?) {
-            val action = intent?.action
-            if (action == BluetoothDevice.ACTION_FOUND) {
+            if (intent?.action == BluetoothDevice.ACTION_FOUND) {
                 val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
                 device?.let {
                     val name = it.name ?: "Unknown Device"
@@ -61,10 +62,20 @@ class AvalibleDivices : AppCompatActivity() {
             return
         }
 
-        checkPermissionsAndStartDiscovery()
+        bluetoothEnableLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == RESULT_OK) {
+                setupReceiverAndDiscover()
+            } else {
+                Toast.makeText(this, "Bluetooth not enabled", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        checkPermissionsAndStart()
     }
 
-    private fun checkPermissionsAndStartDiscovery() {
+    private fun checkPermissionsAndStart() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val permissions = arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
@@ -79,22 +90,32 @@ class AvalibleDivices : AppCompatActivity() {
             if (missingPermissions.isNotEmpty()) {
                 ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), 100)
             } else {
-                startDiscovery()
+                ensureLocationAndBluetooth()
             }
         } else {
-            startDiscovery()
+            ensureLocationAndBluetooth()
+        }
+    }
+
+    private fun ensureLocationAndBluetooth() {
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            Toast.makeText(this, "Please enable Location Services", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+        }
+
+        if (!bluetoothAdapter.isEnabled) {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            bluetoothEnableLauncher.launch(enableBtIntent)
+        } else {
+            setupReceiverAndDiscover()
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun startDiscovery() {
+    private fun setupReceiverAndDiscover() {
         val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
         registerReceiver(receiver, filter)
-
-        if (!bluetoothAdapter.isEnabled) {
-            bluetoothAdapter.enable()
-            Toast.makeText(this, "Enabling Bluetooth...", Toast.LENGTH_SHORT).show()
-        }
 
         if (bluetoothAdapter.isDiscovering) {
             bluetoothAdapter.cancelDiscovery()
@@ -111,7 +132,7 @@ class AvalibleDivices : AppCompatActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 100 && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-            startDiscovery()
+            ensureLocationAndBluetooth()
         } else {
             Toast.makeText(this, "Bluetooth permissions denied", Toast.LENGTH_SHORT).show()
         }
